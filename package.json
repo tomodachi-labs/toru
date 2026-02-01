@@ -1,15 +1,18 @@
 {
   "name": "toru",
   "version": "0.1.0",
-  "description": "Toru - TCG Card Scanner",
-  "main": "electron/main.js",
+  "description": "Toru (撮る) - TCG Card Scanner",
+  "main": "dist/main/index.js",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "electron:dev": "concurrently \"vite\" \"electron .\"",
-    "electron:build": "vite build && electron-builder"
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "package": "electron-vite build && electron-builder",
+    "package:linux": "electron-vite build && electron-builder --linux",
+    "package:win": "electron-vite build && electron-builder --win",
+    "package:mac": "electron-vite build && electron-builder --mac",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "react": "^19.2.0",
@@ -20,9 +23,9 @@
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.4.0",
     "autoprefixer": "^10.4.21",
-    "concurrently": "^9.1.0",
     "electron": "^35.0.0",
     "electron-builder": "^26.0.0",
+    "electron-vite": "^5.0.0",
     "postcss": "^8.5.3",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0",
@@ -32,21 +35,44 @@
     "appId": "com.tomodachi-labs.toru",
     "productName": "Toru",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
-      "dist/**/*",
-      "electron/**/*"
+      "dist/**/*"
     ],
     "linux": {
-      "target": ["deb", "AppImage"],
+      "target": ["AppImage", "deb"],
       "category": "Graphics"
     },
+    "deb": {
+      "depends": ["libsane1", "sane-utils"]
+    },
     "win": {
-      "target": ["nsis"]
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     },
     "mac": {
-      "target": ["dmg"]
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["universal"]
+        }
+      ],
+      "category": "public.app-category.graphics-design"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "tomodachi-labs",
+      "repo": "toru"
     }
   }
 }

@@ -48,7 +48,7 @@ Build **Toru** — a minimal desktop app for Linux that replicates and improves 
    - Progress indicator during scan
 
 2. **Auto-Crop**
-   - Detect card edges using OpenCV
+   - Detect card edges using threshold-based detection or OpenCV
    - Use black scanner background for better edge detection
    - Crop precisely to card boundaries
 
@@ -85,6 +85,7 @@ Build **Toru** — a minimal desktop app for Linux that replicates and improves 
 - **Batch summary** — show all scanned cards in grid after completion
 - **One-click rescan** — rescan specific card if crop failed
 - **Faster startup** — lightweight app, not bloated enterprise software
+- **Auto-updates** — seamless updates via GitHub releases
 
 ## Scope
 
@@ -94,9 +95,10 @@ Build **Toru** — a minimal desktop app for Linux that replicates and improves 
 - Black margin addition
 - Sequential file naming (front/back pairs)
 - Configurable DPI, color mode, format
-- Minimal PyQt desktop UI
+- Electron desktop app with React UI
 - Linux (Pop!_OS) support
 - Ricoh fi-8170 via SANE
+- Auto-update via electron-updater
 
 ### Out of Scope (v1)
 - Print recognition / card identification
@@ -114,14 +116,21 @@ Build **Toru** — a minimal desktop app for Linux that replicates and improves 
 
 ## Technical Considerations
 
-**Stack:**
-- **Electron** — desktop app framework (Node.js backend + Chromium frontend)
-- **React + TypeScript + Tailwind + shadcn/ui** — frontend UI (same stack as Tomodachi)
-- **Node.js** — backend (scanner control, image processing)
-- **sharp** or **jimp** — image processing, crop, margins
-- **node-sane** or native bindings — scanner control via SANE API (Linux)
+### Stack
 
-**Why Electron:**
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| Framework | **Electron 35+** | Desktop app shell |
+| Build Tool | **electron-vite** | Unified bundling for main/preload/renderer |
+| Frontend | **React 19 + TypeScript** | UI components |
+| Styling | **Tailwind v4 + shadcn/ui** | Design system |
+| Image Processing | **Sharp** | Crop, resize, margins, format conversion |
+| Edge Detection | **opencv4nodejs** (optional) | Advanced contour detection if Sharp insufficient |
+| Scanner | **SANE CLI wrapper** | `scanimage` command integration |
+| Packaging | **electron-builder** | Cross-platform distribution |
+| Auto-Update | **electron-updater** | GitHub releases integration |
+
+### Why Electron
 - Cross-platform consistency (same Chromium everywhere)
 - Mature ecosystem, well-documented issues
 - Lower maintenance burden for side project
@@ -130,52 +139,308 @@ Build **Toru** — a minimal desktop app for Linux that replicates and improves 
 
 **Trade-off:** Larger binary (~150MB vs ~15MB) but more reliable cross-platform.
 
-**Architecture:**
+### Architecture
+
 ```
-┌─────────────────────────────────────┐
-│         Electron Window             │
-│  ┌───────────────────────────────┐  │
-│  │   React + Tailwind + shadcn   │  │
-│  │   - Batch name input          │  │
-│  │   - Scan button               │  │
-│  │   - Preview panel             │  │
-│  │   - Settings                  │  │
-│  └───────────────────────────────┘  │
-│                 ↕ IPC (invoke)      │
-│  ┌───────────────────────────────┐  │
-│  │   Node.js Main Process        │  │
-│  │   - SANE scanner control      │  │
-│  │   - Auto-crop (sharp/jimp)    │  │
-│  │   - Margin addition           │  │
-│  │   - File export (PNG/JPG)     │  │
-│  └───────────────────────────────┘  │
-└─────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    Electron Window                          │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │              Renderer Process (React)                 │  │
+│  │   - Batch name input                                  │  │
+│  │   - Scan button                                       │  │
+│  │   - Preview panel                                     │  │
+│  │   - Settings                                          │  │
+│  │   - Uses window.electronAPI (exposed via preload)     │  │
+│  └───────────────────────────────────────────────────────┘  │
+│                         ↕ IPC                               │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │              Preload Script (contextBridge)           │  │
+│  │   - Exposes specific IPC methods only                 │  │
+│  │   - NEVER exposes full ipcRenderer                    │  │
+│  └───────────────────────────────────────────────────────┘  │
+│                         ↕ IPC                               │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │              Main Process (Node.js)                   │  │
+│  │   - SANE scanner control (scanimage CLI)              │  │
+│  │   - Image processing (Sharp)                          │  │
+│  │   - File system operations                            │  │
+│  │   - Auto-updater                                      │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-**Repository:** `toru` (separate GitHub repo, not in Tomodachi monorepo)
+### Project Structure (electron-vite)
 
-**Distribution:**
-- Linux: `.deb`, `.AppImage`
-- Windows: `.exe` (NSIS installer)
-- macOS: `.dmg`
-- ~150MB download size
+```
+toru/
+├── electron/
+│   ├── main/
+│   │   ├── index.ts          # Main process entry
+│   │   ├── scanner.ts        # SANE integration
+│   │   ├── image-processor.ts # Sharp operations
+│   │   └── updater.ts        # Auto-update logic
+│   └── preload/
+│       └── index.ts          # contextBridge API
+├── src/
+│   ├── main.tsx              # React entry
+│   ├── App.tsx               # Root component
+│   ├── components/           # UI components
+│   ├── hooks/                # Custom hooks
+│   └── lib/                  # Utilities
+├── electron.vite.config.ts   # electron-vite config
+├── package.json
+└── electron-builder.yml      # Build configuration
+```
 
-**Scanner integration:**
-- Device ID: `pfufs:fi-8170:XXX:XXX`
-- SANE already working on the system
-- Use black background mode for better crop detection
-- Node.js talks to SANE via native bindings or CLI wrapper
+### Security Best Practices (Electron)
 
-**Image processing pipeline (Node.js):**
-1. Receive raw scan from SANE
-2. Detect card edges (contour detection on black background)
-3. Crop to bounding box
-4. Add black margin (configurable pixels)
-5. Encode as PNG or JPG (configurable quality)
-6. Save with sequential naming (`0001F.png`, `0001B.png`)
-7. Send preview to renderer via Electron IPC
+**Preload script pattern — NEVER expose full ipcRenderer:**
 
-**File structure:**
+```typescript
+// ❌ BAD - exposes full IPC
+contextBridge.exposeInMainWorld('electron', { ipcRenderer })
+
+// ❌ BAD - exposes event object
+contextBridge.exposeInMainWorld('api', {
+  onScanComplete: (callback) => ipcRenderer.on('scan-complete', callback)
+})
+
+// ✅ GOOD - specific methods, filtered callbacks
+contextBridge.exposeInMainWorld('electronAPI', {
+  scanner: {
+    start: (batchName: string) => ipcRenderer.invoke('scanner:start', batchName),
+    stop: () => ipcRenderer.invoke('scanner:stop'),
+    getDevices: () => ipcRenderer.invoke('scanner:getDevices'),
+  },
+  onScanProgress: (callback: (progress: number) => void) => {
+    ipcRenderer.on('scan:progress', (_event, value) => callback(value))
+  },
+  onScanComplete: (callback: (result: ScanResult) => void) => {
+    ipcRenderer.on('scan:complete', (_event, value) => callback(value))
+  },
+})
+```
+
+**Main process security:**
+- `contextIsolation: true` (default in Electron 12+)
+- `nodeIntegration: false` (default)
+- `sandbox: true` for renderer
+- Validate all IPC inputs in main process
+
+### Image Processing with Sharp
+
+```typescript
+import sharp from 'sharp'
+
+// Crop to detected card region
+async function cropCard(inputBuffer: Buffer, region: Region): Promise<Buffer> {
+  return sharp(inputBuffer)
+    .extract({
+      left: region.x,
+      top: region.y,
+      width: region.width,
+      height: region.height,
+    })
+    .toBuffer()
+}
+
+// Add black margin
+async function addMargin(inputBuffer: Buffer, marginPx: number): Promise<Buffer> {
+  return sharp(inputBuffer)
+    .extend({
+      top: marginPx,
+      bottom: marginPx,
+      left: marginPx,
+      right: marginPx,
+      background: { r: 0, g: 0, b: 0 },
+    })
+    .toBuffer()
+}
+
+// Export as JPEG with quality
+async function exportJpeg(inputBuffer: Buffer, quality: number): Promise<Buffer> {
+  return sharp(inputBuffer)
+    .jpeg({ quality, chromaSubsampling: '4:4:4' })
+    .toBuffer()
+}
+
+// Export as PNG
+async function exportPng(inputBuffer: Buffer): Promise<Buffer> {
+  return sharp(inputBuffer)
+    .png({ compressionLevel: 9 })
+    .toBuffer()
+}
+
+// Full pipeline
+async function processCard(
+  rawScan: Buffer,
+  region: Region,
+  options: { margin: number; format: 'png' | 'jpg'; jpgQuality: number }
+): Promise<Buffer> {
+  let buffer = await cropCard(rawScan, region)
+  buffer = await addMargin(buffer, options.margin)
+
+  if (options.format === 'jpg') {
+    return exportJpeg(buffer, options.jpgQuality)
+  }
+  return exportPng(buffer)
+}
+```
+
+### Scanner Integration (SANE CLI)
+
+```typescript
+import { spawn } from 'child_process'
+
+interface ScanOptions {
+  device: string
+  dpi: number
+  mode: 'Color' | 'Gray'
+  format: 'png' | 'tiff'
+}
+
+async function scanPage(options: ScanOptions): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-d', options.device,
+      '--resolution', String(options.dpi),
+      '--mode', options.mode,
+      '--format', options.format,
+      '--batch-prompt',  // For ADF
+    ]
+
+    const proc = spawn('scanimage', args)
+    const chunks: Buffer[] = []
+
+    proc.stdout.on('data', (chunk) => chunks.push(chunk))
+    proc.on('close', (code) => {
+      if (code === 0) {
+        resolve(Buffer.concat(chunks))
+      } else {
+        reject(new Error(`scanimage exited with code ${code}`))
+      }
+    })
+  })
+}
+
+async function listDevices(): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('scanimage', ['-L'])
+    let output = ''
+
+    proc.stdout.on('data', (chunk) => { output += chunk })
+    proc.on('close', () => {
+      const devices = output
+        .split('\n')
+        .filter(line => line.includes('device'))
+        .map(line => line.match(/`(.+?)'/)?.[1])
+        .filter(Boolean) as string[]
+      resolve(devices)
+    })
+  })
+}
+```
+
+### electron-builder Configuration
+
+```yaml
+# electron-builder.yml
+appId: com.tomodachi-labs.toru
+productName: Toru
+copyright: Copyright © 2026 Tomodachi Labs
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - "dist/**/*"
+  - "!**/*.ts"
+  - "!**/*.map"
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Graphics
+  desktop:
+    MimeType: ""
+
+deb:
+  depends:
+    - libsane1
+    - sane-utils
+  priority: optional
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+
+mac:
+  target:
+    - target: dmg
+      arch: [universal]
+  category: public.app-category.graphics-design
+  hardenedRuntime: true
+
+publish:
+  provider: github
+  owner: tomodachi-labs
+  repo: toru
+  releaseType: release
+```
+
+### Auto-Update Setup
+
+```typescript
+// electron/main/updater.ts
+import { autoUpdater } from 'electron-updater'
+import log from 'electron-log'
+
+autoUpdater.logger = log
+autoUpdater.autoDownload = false
+autoUpdater.autoInstallOnAppQuit = true
+
+export function setupAutoUpdater(mainWindow: BrowserWindow) {
+  autoUpdater.on('update-available', (info) => {
+    mainWindow.webContents.send('update:available', info.version)
+  })
+
+  autoUpdater.on('download-progress', (progress) => {
+    mainWindow.webContents.send('update:progress', progress.percent)
+  })
+
+  autoUpdater.on('update-downloaded', () => {
+    mainWindow.webContents.send('update:ready')
+  })
+
+  // Check for updates after app starts
+  setTimeout(() => autoUpdater.checkForUpdates(), 3000)
+}
+
+// IPC handlers
+ipcMain.handle('update:download', () => autoUpdater.downloadUpdate())
+ipcMain.handle('update:install', () => autoUpdater.quitAndInstall(false, true))
+```
+
+### Distribution
+
+| Platform | Format | Dependencies |
+|----------|--------|--------------|
+| Linux | `.AppImage`, `.deb` | libsane1, sane-utils |
+| Windows | `.exe` (NSIS) | None (bundle SANE or use WIA) |
+| macOS | `.dmg` | None (use ImageCaptureCore) |
+
+**Size:** ~150MB (Electron + Chromium)
+
+### File Output Structure
+
 ```
 output/
   DEP-ABC123/
@@ -184,6 +449,21 @@ output/
     0002F.png
     0002B.png
     ...
+    batch.json        # Metadata (optional)
+```
+
+**batch.json (optional):**
+```json
+{
+  "batchName": "DEP-ABC123",
+  "scannedAt": "2026-02-01T12:00:00Z",
+  "cardCount": 50,
+  "settings": {
+    "dpi": 600,
+    "format": "png",
+    "margin": 2
+  }
+}
 ```
 
 ## Open Questions
@@ -203,6 +483,12 @@ output/
 ~5. **Preview resolution** — Show full-res preview or scaled thumbnail for performance?~
 **Decided:** Full-res preview
 
+6. **Edge detection approach** — Start with Sharp threshold detection or use opencv4nodejs from the start?
+   - Recommendation: Start with Sharp (simpler), add OpenCV if accuracy insufficient
+
+7. **Windows scanner support** — Use SANE via WSL, WIA, or TWAIN?
+   - Recommendation: Defer to v2, focus on Linux first
+
 ## Success Criteria
 
 - [ ] Staff can batch scan 100 cards in under 5 minutes
@@ -213,3 +499,12 @@ output/
 - [ ] App runs on Pop!_OS, Windows, macOS without additional configuration
 - [ ] Single installer per platform (.deb, .exe, .dmg)
 - [ ] Startup time < 3 seconds
+- [ ] Auto-update works via GitHub releases
+
+## References
+
+- [Electron Security Best Practices](https://www.electronjs.org/docs/latest/tutorial/security)
+- [electron-vite Documentation](https://electron-vite.org/)
+- [Sharp API Reference](https://sharp.pixelplumbing.com/)
+- [electron-builder Configuration](https://www.electron.build/configuration)
+- [SANE scanimage Manual](http://www.sane-project.org/man/scanimage.1.html)
