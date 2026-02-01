@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+console.log('Preload script starting...')
+
 // Type definitions for the exposed API
 export interface ScanResult {
   success: boolean

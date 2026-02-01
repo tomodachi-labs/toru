@@ -15,7 +15,11 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "types": ["electron-vite/node"]
+    "types": ["electron-vite/node"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
   },
   "include": ["src", "electron"],
   "references": [{ "path": "./tsconfig.node.json" }]

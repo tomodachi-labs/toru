@@ -1,4 +1,8 @@
 import { useState, useEffect } from 'react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Progress } from '@/components/ui/progress'
 import type { ScanProgress } from './types/electron'
 
 function App() {
@@ -7,7 +11,6 @@ function App() {
   const [progress, setProgress] = useState<ScanProgress | null>(null)
 
   useEffect(() => {
-    // Subscribe to scan events
     const unsubProgress = window.electronAPI.onScanProgress((p) => {
       setProgress(p)
     })
@@ -49,71 +52,84 @@ function App() {
     setProgress(null)
   }
 
+  const progressPercent = progress ? (progress.current / progress.total) * 100 : 0
+
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100 p-8">
-      <div className="max-w-2xl mx-auto">
-        <h1 className="text-3xl font-bold mb-2">Toru</h1>
-        <p className="text-neutral-400 mb-8">TCG Card Scanner</p>
+    <main className="min-h-screen bg-background text-foreground p-8">
+      <div className="max-w-2xl mx-auto space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Toru</h1>
+          <p className="text-muted-foreground">TCG Card Scanner</p>
+        </div>
 
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm text-neutral-400 mb-2">
-              Batch Name
-            </label>
-            <input
-              type="text"
-              value={batchName}
-              onChange={(e) => setBatchName(e.target.value)}
-              placeholder="e.g. deposit-001"
-              disabled={scanning}
-              className="w-full px-4 py-2 bg-neutral-900 border border-neutral-800 rounded-lg focus:outline-none focus:border-neutral-600 disabled:opacity-50"
-            />
-          </div>
-
-          {!scanning ? (
-            <button
-              onClick={startScan}
-              disabled={!batchName.trim()}
-              className="w-full px-4 py-3 bg-white text-black font-medium rounded-lg hover:bg-neutral-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              Start Scan
-            </button>
-          ) : (
-            <button
-              onClick={stopScan}
-              className="w-full px-4 py-3 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 transition-colors"
-            >
-              Stop Scan
-            </button>
-          )}
-
-          {progress && (
+        <Card>
+          <CardHeader>
+            <CardTitle>New Scan</CardTitle>
+            <CardDescription>
+              Enter a batch name and start scanning cards
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
             <div className="space-y-2">
-              <div className="flex justify-between text-sm text-neutral-400">
-                <span>Scanning...</span>
-                <span>{progress.current} / {progress.total}</span>
-              </div>
-              <div className="h-2 bg-neutral-800 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-white transition-all duration-300"
-                  style={{ width: `${(progress.current / progress.total) * 100}%` }}
-                />
-              </div>
+              <label className="text-sm font-medium">Batch Name</label>
+              <Input
+                type="text"
+                value={batchName}
+                onChange={(e) => setBatchName(e.target.value)}
+                placeholder="e.g. deposit-001"
+                disabled={scanning}
+              />
             </div>
-          )}
-        </div>
 
-        <div className="mt-8 p-4 border border-neutral-800 rounded-lg min-h-[300px] flex items-center justify-center">
-          {progress?.preview ? (
-            <img
-              src={`data:image/png;base64,${progress.preview}`}
-              alt="Last scanned card"
-              className="max-h-[280px] object-contain"
-            />
-          ) : (
-            <p className="text-neutral-600">Preview will appear here</p>
-          )}
-        </div>
+            {!scanning ? (
+              <Button
+                onClick={startScan}
+                disabled={!batchName.trim()}
+                className="w-full"
+              >
+                Start Scan
+              </Button>
+            ) : (
+              <Button
+                onClick={stopScan}
+                variant="destructive"
+                className="w-full"
+              >
+                Stop Scan
+              </Button>
+            )}
+
+            {progress && (
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm text-muted-foreground">
+                  <span>Scanning...</span>
+                  <span>{progress.current} / {progress.total}</span>
+                </div>
+                <Progress value={progressPercent} />
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Preview</CardTitle>
+            <CardDescription>Last scanned card</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="min-h-[300px] flex items-center justify-center border border-dashed border-border rounded-lg">
+              {progress?.preview ? (
+                <img
+                  src={`data:image/png;base64,${progress.preview}`}
+                  alt="Last scanned card"
+                  className="max-h-[280px] object-contain"
+                />
+              ) : (
+                <p className="text-muted-foreground">No preview available</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </main>
   )

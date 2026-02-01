@@ -1,5 +1,6 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'path'
+import { is } from '@electron-toolkit/utils'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -8,19 +9,28 @@ function createWindow() {
     width: 1024,
     height: 768,
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: join(__dirname, '../preload/index.mjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
     },
   })
 
-  // Load the renderer
-  if (process.env.NODE_ENV === 'development') {
-    mainWindow.loadURL('http://localhost:5173')
-    mainWindow.webContents.openDevTools()
+  mainWindow.webContents.setWindowOpenHandler((details) => {
+    shell.openExternal(details.url)
+    return { action: 'deny' }
+  })
+
+  // Load the renderer - electron-vite handles the URL automatically
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+
+  // Open DevTools in development
+  if (is.dev) {
+    mainWindow.webContents.openDevTools()
   }
 
   mainWindow.on('closed', () => {
