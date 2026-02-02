@@ -5,7 +5,7 @@
   "main": "dist/main/index.js",
   "type": "module",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "electron-vite dev 2>&1 | grep -v 'GLib-GObject\\|GLib-GIO'",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "package": "electron-vite build && electron-builder",

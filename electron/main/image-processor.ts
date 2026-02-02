@@ -7,11 +7,16 @@ export interface CropRegion {
   height: number
 }
 
+export interface ColorAdjustments {
+  saturation: number  // 0.5 to 2.0, default 1.0 (1 = no change)
+}
+
 export interface ProcessingOptions {
   marginPx: number
   format: 'png' | 'jpg'
   jpgQuality: number
   dpi: number
+  colorAdjustments?: ColorAdjustments  // Optional post-processing color adjustments
 }
 
 export interface ProcessedCard {
@@ -55,6 +60,23 @@ export async function autoCrop(
   }
 
   return { buffer: result.data, region }
+}
+
+/**
+ * Apply color adjustments using Sharp's modulate
+ */
+export async function adjustColors(
+  buffer: Buffer,
+  adjustments: ColorAdjustments
+): Promise<Buffer> {
+  // Skip if no adjustments needed
+  if (adjustments.saturation === 1.0) {
+    return buffer
+  }
+
+  return sharp(buffer)
+    .modulate({ saturation: adjustments.saturation })
+    .toBuffer()
 }
 
 /**
@@ -172,16 +194,22 @@ export async function processCard(
   // Step 2: Validate crop
   const validation = validateCrop(region, options.dpi)
 
-  // Step 3: Add margin if configured
-  const withMargin = await addMargin(cropped, options.marginPx)
+  // Step 3: Apply color adjustments if configured
+  let colorAdjusted = cropped
+  if (options.colorAdjustments) {
+    colorAdjusted = await adjustColors(cropped, options.colorAdjustments)
+  }
 
-  // Step 4: Export to final format
+  // Step 4: Add margin if configured
+  const withMargin = await addMargin(colorAdjusted, options.marginPx)
+
+  // Step 5: Export to final format
   const final = await exportImage(withMargin, {
     format: options.format,
     jpgQuality: options.jpgQuality,
   })
 
-  // Step 5: Generate filename
+  // Step 6: Generate filename
   const filename = generateFilename(cardNumber, side, options.format)
 
   return {

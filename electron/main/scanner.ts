@@ -10,10 +10,17 @@ export interface ScannerDevice {
   model: string
 }
 
+export interface ColorOptions {
+  brightness: number  // -127 to 127, default 0
+  contrast: number    // -127 to 127, default 0
+  gamma: number       // 0.1 to 10, default 1.0
+}
+
 export interface ScanOptions {
   deviceId: string
   dpi: number
   duplex: boolean
+  color?: ColorOptions  // Optional, uses scanner defaults if not set
 }
 
 export interface PageEvent {
@@ -134,6 +141,11 @@ export class ScannerService extends EventEmitter {
       'png',
       `--batch=${batchPattern}`,
       '--batch-start=1',
+      // TCG card scanning optimizations for fi-8170
+      '--paper-size', 'Custom',
+      '--page-width', '63',   // TCG card width in mm
+      '--page-height', '88',  // TCG card height in mm
+      '--page-auto=yes',      // Auto-detect actual page size
     ]
 
     // Add duplex source if requested
@@ -144,6 +156,22 @@ export class ScannerService extends EventEmitter {
       args.push('--source', 'Adf-front')
     }
 
+    // Add color adjustment options if provided
+    // fi-8170 requires --tone-adjustment Custom before brightness/contrast/gamma
+    if (options.color) {
+      args.push('--tone-adjustment', 'Custom')
+      if (options.color.brightness !== 0) {
+        args.push('--brightness', options.color.brightness.toString())
+      }
+      if (options.color.contrast !== 0) {
+        args.push('--contrast', options.color.contrast.toString())
+      }
+      if (options.color.gamma !== 1.0) {
+        args.push('--gamma', options.color.gamma.toString())
+      }
+    }
+
+    console.log('[Scanner] Running: scanimage', args.join(' '))
     this.process = spawn('scanimage', args)
 
     // Poll temp directory for new pages
@@ -166,8 +194,15 @@ export class ScannerService extends EventEmitter {
     })
 
     this.process.on('close', async (code) => {
-      // Process any remaining pages before cleanup
-      await this.checkForNewPages(options.duplex)
+      // Stop polling
+      if (this.pollInterval) {
+        clearInterval(this.pollInterval)
+        this.pollInterval = null
+      }
+
+      // Process any remaining pages with retries
+      // Files may still be writing when scanimage exits
+      await this.waitForRemainingPages(options.duplex)
 
       const pageCount = this.processedPages.size
 
@@ -182,14 +217,18 @@ export class ScannerService extends EventEmitter {
     })
   }
 
-  private async checkForNewPages(duplex: boolean): Promise<void> {
-    if (!this.tempDir) return
+  private async checkForNewPages(duplex: boolean): Promise<number> {
+    if (!this.tempDir) return 0
+
+    let pagesProcessed = 0
 
     try {
       const files = await readdir(this.tempDir)
       const pageFiles = files
         .filter((f) => f.startsWith('page') && f.endsWith('.png'))
         .sort()
+
+      console.log(`[Scanner] Found ${pageFiles.length} files, processed so far: ${this.processedPages.size}`)
 
       for (const file of pageFiles) {
         // Extract page number from filename (e.g., "page0001.png" -> 1)
@@ -205,14 +244,67 @@ export class ScannerService extends EventEmitter {
           // Calculate card number and side from page number
           const { cardNumber, side } = this.getCardInfo(pageNumber, duplex)
 
+          console.log(`[Scanner] Emitting page ${pageNumber} -> card ${cardNumber}${side} (${buffer.length} bytes)`)
           this.processedPages.add(pageNumber)
           this.emit('page', { pageNumber, cardNumber, side, buffer })
-        } catch {
+          pagesProcessed++
+        } catch (err) {
           // File might still be writing, skip for now
+          console.log(`[Scanner] Could not read ${file} yet: ${err}`)
         }
       }
-    } catch {
+    } catch (err) {
       // Directory might not exist yet
+      console.log(`[Scanner] Could not read temp dir: ${err}`)
+    }
+
+    return pagesProcessed
+  }
+
+  /**
+   * Wait for all remaining pages to be written and processed
+   * Retries with delays to handle files still being written when scanimage exits
+   */
+  private async waitForRemainingPages(duplex: boolean): Promise<void> {
+    if (!this.tempDir) return
+
+    const maxRetries = 10
+    const retryDelay = 200 // ms
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      // Small delay to let files finish writing
+      await new Promise((resolve) => setTimeout(resolve, retryDelay))
+
+      // Check for new pages
+      const processed = await this.checkForNewPages(duplex)
+
+      // Count total files in directory
+      try {
+        const files = await readdir(this.tempDir)
+        const pageFiles = files.filter((f) => f.startsWith('page') && f.endsWith('.png'))
+
+        // If we've processed all files, we're done
+        if (pageFiles.length === this.processedPages.size) {
+          return
+        }
+
+        // If we processed some pages this round, keep trying
+        if (processed > 0) {
+          continue
+        }
+
+        // If no progress after a few attempts, give up
+        if (attempt >= 3 && processed === 0) {
+          console.warn(
+            `[Scanner] Giving up after ${attempt + 1} attempts. ` +
+              `Processed ${this.processedPages.size}/${pageFiles.length} pages.`
+          )
+          return
+        }
+      } catch {
+        // Directory gone, we're done
+        return
+      }
     }
   }
 

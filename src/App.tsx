@@ -36,6 +36,10 @@ function App() {
     outputDirectory: '',
     deviceId: '',
     duplex: true,
+    scannerBrightness: 0,
+    scannerContrast: 10,
+    scannerGamma: 1.0,
+    saturation: 1.1,
   })
 
   // Completed scans counter
@@ -58,7 +62,7 @@ function App() {
       if (result.cardCount) {
         setTotalScanned((prev) => prev + result.cardCount!)
       }
-      setProgress(null)
+      // Don't clear progress - keep the last preview visible
     })
 
     const unsubError = window.electronAPI.onScanError((err) => {
@@ -136,7 +140,7 @@ function App() {
   async function stopScan() {
     await window.electronAPI.scanner.stop()
     setScanning(false)
-    setProgress(null)
+    // Don't clear progress - keep the last preview visible
   }
 
   const progressPercent = progress ? (progress.current / progress.total) * 100 : 0
@@ -236,7 +240,7 @@ function App() {
                   {progress?.preview ? (
                     <div className="relative animate-fade-in">
                       <img
-                        src={`data:image/png;base64,${progress.preview}`}
+                        src={`data:image/${settings.format === 'jpg' ? 'jpeg' : 'png'};base64,${progress.preview}`}
                         alt="Last scanned card"
                         className="max-h-[450px] max-w-full object-contain rounded-lg shadow-2xl shadow-black/50"
                       />
@@ -529,6 +533,120 @@ function App() {
                         `}
                       />
                     </button>
+                  </div>
+
+                  {/* Color Settings Divider */}
+                  <div className="border-t border-border pt-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+                        Color Adjustments
+                      </h3>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() =>
+                          saveSettings({
+                            scannerBrightness: 0,
+                            scannerContrast: 10,
+                            scannerGamma: 1.0,
+                            saturation: 1.1,
+                          })
+                        }
+                        disabled={scanning}
+                        className="text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        Reset
+                      </Button>
+                    </div>
+
+                    {/* Scanner Brightness */}
+                    <div className="space-y-2 mb-4">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm">Brightness</label>
+                        <span className="text-sm font-mono text-muted-foreground tabular-nums">
+                          {settings.scannerBrightness > 0 ? '+' : ''}{settings.scannerBrightness}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="-50"
+                        max="50"
+                        value={settings.scannerBrightness}
+                        onChange={(e) =>
+                          saveSettings({ scannerBrightness: parseInt(e.target.value) })
+                        }
+                        disabled={scanning}
+                        className="w-full"
+                      />
+                    </div>
+
+                    {/* Scanner Contrast */}
+                    <div className="space-y-2 mb-4">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm">Contrast</label>
+                        <span className="text-sm font-mono text-muted-foreground tabular-nums">
+                          {settings.scannerContrast > 0 ? '+' : ''}{settings.scannerContrast}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="-50"
+                        max="50"
+                        value={settings.scannerContrast}
+                        onChange={(e) =>
+                          saveSettings({ scannerContrast: parseInt(e.target.value) })
+                        }
+                        disabled={scanning}
+                        className="w-full"
+                      />
+                    </div>
+
+                    {/* Scanner Gamma */}
+                    <div className="space-y-2 mb-4">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm">Gamma</label>
+                        <span className="text-sm font-mono text-muted-foreground tabular-nums">
+                          {settings.scannerGamma.toFixed(1)}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="2.0"
+                        step="0.1"
+                        value={settings.scannerGamma}
+                        onChange={(e) =>
+                          saveSettings({ scannerGamma: parseFloat(e.target.value) })
+                        }
+                        disabled={scanning}
+                        className="w-full"
+                      />
+                    </div>
+
+                    {/* Post-processing Saturation */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm">Saturation</label>
+                        <span className="text-sm font-mono text-muted-foreground tabular-nums">
+                          {Math.round(settings.saturation * 100)}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="1.5"
+                        step="0.05"
+                        value={settings.saturation}
+                        onChange={(e) =>
+                          saveSettings({ saturation: parseFloat(e.target.value) })
+                        }
+                        disabled={scanning}
+                        className="w-full"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Post-processing color enhancement
+                      </p>
+                    </div>
                   </div>
 
                   {/* Output directory */}

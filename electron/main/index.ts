@@ -22,6 +22,13 @@ let settings = {
   outputDirectory: '',
   deviceId: '',
   duplex: true,
+  // Scanner color adjustments (applied during scan)
+  // Defaults optimized for Pokemon TCG card scanning
+  scannerBrightness: 0,   // -50 to 50 (maps to -127..127 internally)
+  scannerContrast: 10,    // -50 to 50 - slight boost for card details
+  scannerGamma: 1.0,      // 0.5 to 2.0
+  // Post-processing color adjustments (applied after scan)
+  saturation: 1.1,        // 0.5 to 1.5 - 10% boost for vibrant card colors
 }
 
 // Set default output directory after app is ready
@@ -84,7 +91,12 @@ app.on('window-all-closed', () => {
 // ============================================================
 
 scanner.on('page', async (page) => {
-  if (!currentOutputDir) return
+  console.log(`[Main] Received page ${page.pageNumber} -> card ${page.cardNumber}${page.side}`)
+
+  if (!currentOutputDir) {
+    console.error('[Main] No output directory set!')
+    return
+  }
 
   try {
     const processingOptions: ProcessingOptions = {
@@ -92,6 +104,10 @@ scanner.on('page', async (page) => {
       format: settings.format,
       jpgQuality: settings.jpgQuality,
       dpi: settings.dpi,
+      // Add color adjustments if saturation is not default
+      colorAdjustments: settings.saturation !== 1.0
+        ? { saturation: settings.saturation }
+        : undefined,
     }
 
     const processed = await processCard(
@@ -102,7 +118,9 @@ scanner.on('page', async (page) => {
     )
 
     // Save to output directory
-    await writeFile(join(currentOutputDir, processed.filename), processed.buffer)
+    const outputPath = join(currentOutputDir, processed.filename)
+    await writeFile(outputPath, processed.buffer)
+    console.log(`[Main] Saved ${processed.filename} (${processed.buffer.length} bytes)`)
 
     // Update card count (only count when we get a front side)
     if (page.side === 'F') {
@@ -115,13 +133,14 @@ scanner.on('page', async (page) => {
     }
 
     // Send progress to renderer
+    console.log(`[Main] Sending preview for card ${page.cardNumber}${page.side}`)
     mainWindow?.webContents.send('scan:progress', {
       current: cardCount,
       total: 0, // Unknown total with ADF
       preview: processed.buffer.toString('base64'),
     })
   } catch (err) {
-    console.error('Error processing page:', err)
+    console.error('[Main] Error processing page:', err)
     mainWindow?.webContents.send('scan:error', `Failed to process card ${page.cardNumber}${page.side}`)
   }
 })
@@ -174,10 +193,24 @@ ipcMain.handle('scanner:start', async (_event, batchName: string) => {
   console.log('Starting scan for batch:', batchName)
   console.log('Output directory:', currentOutputDir)
 
+  // Build color options if any are non-default
+  const hasColorOptions =
+    settings.scannerBrightness !== 0 ||
+    settings.scannerContrast !== 0 ||
+    settings.scannerGamma !== 1.0
+
   const scanOptions: ScanOptions = {
     deviceId: settings.deviceId,
     dpi: settings.dpi,
     duplex: settings.duplex,
+    // Map UI values (-50 to 50) to scanner range (-127 to 127) for brightness/contrast
+    color: hasColorOptions
+      ? {
+          brightness: Math.round(settings.scannerBrightness * 2.54),
+          contrast: Math.round(settings.scannerContrast * 2.54),
+          gamma: settings.scannerGamma,
+        }
+      : undefined,
   }
 
   // Start scanning (async - events will handle progress)

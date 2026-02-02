@@ -24,6 +24,12 @@ export interface Settings {
   outputDirectory: string
   deviceId: string
   duplex: boolean
+  // Scanner color adjustments (applied during scan)
+  scannerBrightness: number  // -50 to 50
+  scannerContrast: number    // -50 to 50
+  scannerGamma: number       // 0.5 to 2.0
+  // Post-processing color adjustments (applied after scan)
+  saturation: number         // 0.5 to 1.5
 }
 
 export interface ElectronAPI {
