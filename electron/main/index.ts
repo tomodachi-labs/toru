@@ -12,6 +12,7 @@ const scanner = new ScannerService()
 let currentBatchName: string | null = null
 let currentOutputDir: string | null = null
 let cardCount = 0
+let processingQueue: Promise<void> = Promise.resolve()
 
 // Default settings
 let settings = {
@@ -23,12 +24,11 @@ let settings = {
   deviceId: '',
   duplex: true,
   // Scanner color adjustments (applied during scan)
-  // Defaults optimized for Pokemon TCG card scanning
   scannerBrightness: 0,   // -50 to 50 (maps to -127..127 internally)
-  scannerContrast: 10,    // -50 to 50 - slight boost for card details
+  scannerContrast: -10,   // -50 to 50 - reduced to compensate for scanner
   scannerGamma: 1.0,      // 0.5 to 2.0
   // Post-processing color adjustments (applied after scan)
-  saturation: 1.1,        // 0.5 to 1.5 - 10% boost for vibrant card colors
+  saturation: 0.9,        // 0.5 to 1.5 - reduced to compensate for scanner
 }
 
 // Set default output directory after app is ready
@@ -90,79 +90,96 @@ app.on('window-all-closed', () => {
 // Scanner Event Handlers
 // ============================================================
 
-scanner.on('page', async (page) => {
+scanner.on('page', (page) => {
   console.log(`[Main] Received page ${page.pageNumber} -> card ${page.cardNumber}${page.side}`)
 
-  if (!currentOutputDir) {
-    console.error('[Main] No output directory set!')
-    return
-  }
+  // Capture current state for this page (before it could be reset)
+  const outputDir = currentOutputDir
 
-  try {
-    const processingOptions: ProcessingOptions = {
-      marginPx: Math.round((settings.margin / 25.4) * settings.dpi), // Convert mm to pixels
-      format: settings.format,
-      jpgQuality: settings.jpgQuality,
-      dpi: settings.dpi,
-      // Add color adjustments if saturation is not default
-      colorAdjustments: settings.saturation !== 1.0
-        ? { saturation: settings.saturation }
-        : undefined,
+  // Queue this page for sequential processing
+  processingQueue = processingQueue.then(async () => {
+    if (!outputDir) {
+      console.error('[Main] No output directory set!')
+      return
     }
 
-    const processed = await processCard(
-      page.buffer,
-      page.cardNumber,
-      page.side,
-      processingOptions
-    )
+    try {
+      const processingOptions: ProcessingOptions = {
+        marginPx: Math.round((settings.margin / 25.4) * settings.dpi), // Convert mm to pixels
+        format: settings.format,
+        jpgQuality: settings.jpgQuality,
+        dpi: settings.dpi,
+        // Add color adjustments if saturation is not default
+        colorAdjustments: settings.saturation !== 1.0
+          ? { saturation: settings.saturation }
+          : undefined,
+      }
 
-    // Save to output directory
-    const outputPath = join(currentOutputDir, processed.filename)
-    await writeFile(outputPath, processed.buffer)
-    console.log(`[Main] Saved ${processed.filename} (${processed.buffer.length} bytes)`)
+      const processed = await processCard(
+        page.buffer,
+        page.cardNumber,
+        page.side,
+        processingOptions
+      )
 
-    // Update card count (only count when we get a front side)
-    if (page.side === 'F') {
-      cardCount = page.cardNumber
+      // Save to output directory
+      const outputPath = join(outputDir, processed.filename)
+      await writeFile(outputPath, processed.buffer)
+      console.log(`[Main] Saved ${processed.filename} (${processed.buffer.length} bytes)`)
+
+      // Update card count (only count when we get a front side)
+      if (page.side === 'F') {
+        cardCount = page.cardNumber
+      }
+
+      // Log validation warnings
+      if (!processed.validation.valid) {
+        console.warn(`[Card ${page.cardNumber}${page.side}] Crop warning: ${processed.validation.reason}`)
+      }
+
+      // Send progress to renderer
+      console.log(`[Main] Sending preview for card ${page.cardNumber}${page.side}`)
+      mainWindow?.webContents.send('scan:progress', {
+        current: cardCount,
+        total: 0, // Unknown total with ADF
+        preview: processed.buffer.toString('base64'),
+      })
+    } catch (err) {
+      console.error('[Main] Error processing page:', err)
+      mainWindow?.webContents.send('scan:error', `Failed to process card ${page.cardNumber}${page.side}`)
     }
-
-    // Log validation warnings
-    if (!processed.validation.valid) {
-      console.warn(`[Card ${page.cardNumber}${page.side}] Crop warning: ${processed.validation.reason}`)
-    }
-
-    // Send progress to renderer
-    console.log(`[Main] Sending preview for card ${page.cardNumber}${page.side}`)
-    mainWindow?.webContents.send('scan:progress', {
-      current: cardCount,
-      total: 0, // Unknown total with ADF
-      preview: processed.buffer.toString('base64'),
-    })
-  } catch (err) {
-    console.error('[Main] Error processing page:', err)
-    mainWindow?.webContents.send('scan:error', `Failed to process card ${page.cardNumber}${page.side}`)
-  }
+  })
 })
 
 scanner.on('complete', ({ pageCount }) => {
-  console.log(`Batch "${currentBatchName}" complete: ${pageCount} pages, ${cardCount} cards`)
-  mainWindow?.webContents.send('scan:complete', {
-    success: true,
-    cardCount,
-    message: `Scanned ${cardCount} cards to ${currentOutputDir}`,
+  console.log(`[Main] Batch "${currentBatchName}" scanner complete: ${pageCount} pages emitted, waiting for processing queue...`)
+
+  // Wait for all queued processing to finish before resetting state
+  processingQueue.then(() => {
+    console.log(`[Main] Processing complete: ${cardCount} cards saved`)
+    mainWindow?.webContents.send('scan:complete', {
+      success: true,
+      cardCount,
+      message: `Scanned ${cardCount} cards to ${currentOutputDir}`,
+    })
+    currentBatchName = null
+    currentOutputDir = null
+    cardCount = 0
+    processingQueue = Promise.resolve()
   })
-  currentBatchName = null
-  currentOutputDir = null
-  cardCount = 0
 })
 
 scanner.on('error', (err) => {
   console.error('Scanner error:', err)
   mainWindow?.webContents.send('scan:error', err.message)
-  currentBatchName = null
-  currentOutputDir = null
-  cardCount = 0
+
+  // Wait for any pending processing before resetting state
+  processingQueue.then(() => {
+    currentBatchName = null
+    currentOutputDir = null
+    cardCount = 0
+    processingQueue = Promise.resolve()
+  })
 })
 
 // ============================================================
@@ -187,6 +204,7 @@ ipcMain.handle('scanner:start', async (_event, batchName: string) => {
   currentBatchName = batchName
   currentOutputDir = join(settings.outputDirectory, batchName)
   cardCount = 0
+  processingQueue = Promise.resolve()
 
   await mkdir(currentOutputDir, { recursive: true })
 
