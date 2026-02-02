@@ -15,12 +15,20 @@ export interface ScanProgress {
   preview?: string // Base64 encoded image
 }
 
+export interface ScannerDevice {
+  id: string
+  name: string
+  model: string
+}
+
 export interface Settings {
   dpi: number
   format: 'png' | 'jpg'
   margin: number
   jpgQuality: number
   outputDirectory: string
+  deviceId: string
+  duplex: boolean
 }
 
 // ============================================================
@@ -35,8 +43,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('scanner:start', batchName),
     stop: (): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('scanner:stop'),
-    getDevices: (): Promise<string[]> =>
+    getDevices: (): Promise<ScannerDevice[]> =>
       ipcRenderer.invoke('scanner:getDevices'),
+    isScanning: (): Promise<boolean> =>
+      ipcRenderer.invoke('scanner:isScanning'),
   },
 
   // Settings

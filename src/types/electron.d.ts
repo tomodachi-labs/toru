@@ -7,7 +7,13 @@ export interface ScanResult {
 export interface ScanProgress {
   current: number
   total: number
-  preview?: string
+  preview?: string // Base64 encoded image
+}
+
+export interface ScannerDevice {
+  id: string
+  name: string
+  model: string
 }
 
 export interface Settings {
@@ -16,13 +22,16 @@ export interface Settings {
   margin: number
   jpgQuality: number
   outputDirectory: string
+  deviceId: string
+  duplex: boolean
 }
 
 export interface ElectronAPI {
   scanner: {
     start: (batchName: string) => Promise<ScanResult>
     stop: () => Promise<{ success: boolean }>
-    getDevices: () => Promise<string[]>
+    getDevices: () => Promise<ScannerDevice[]>
+    isScanning: () => Promise<boolean>
   }
   settings: {
     get: () => Promise<Settings>
