@@ -11,12 +11,19 @@ export interface ColorAdjustments {
   saturation: number  // 0.5 to 2.0, default 1.0 (1 = no change)
 }
 
+export interface AutoBrightnessOptions {
+  enabled: boolean
+  targetBrightness: number  // Target mean brightness 0-255, default ~128
+  minBrightness: number     // Only correct if below this threshold, default ~100
+}
+
 export interface ProcessingOptions {
   marginPx: number
   format: 'png' | 'jpg'
   jpgQuality: number
   dpi: number
   colorAdjustments?: ColorAdjustments  // Optional post-processing color adjustments
+  autoBrightness?: AutoBrightnessOptions  // Automatic brightness normalization
 }
 
 export interface ProcessedCard {
@@ -77,6 +84,61 @@ export async function adjustColors(
   return sharp(buffer)
     .modulate({ saturation: adjustments.saturation })
     .toBuffer()
+}
+
+/**
+ * Analyze image brightness by calculating mean luminance
+ * Returns value 0-255
+ */
+export async function analyzeBrightness(buffer: Buffer): Promise<number> {
+  const stats = await sharp(buffer).stats()
+
+  // Calculate perceived luminance using standard coefficients
+  // Y = 0.299*R + 0.587*G + 0.114*B
+  const r = stats.channels[0].mean
+  const g = stats.channels[1].mean
+  const b = stats.channels[2].mean
+
+  return 0.299 * r + 0.587 * g + 0.114 * b
+}
+
+/**
+ * Normalize brightness if image is too dark
+ * Uses gamma correction for natural-looking results
+ */
+export async function normalizeBrightness(
+  buffer: Buffer,
+  options: AutoBrightnessOptions
+): Promise<{ buffer: Buffer; corrected: boolean; originalBrightness: number }> {
+  if (!options.enabled) {
+    return { buffer, corrected: false, originalBrightness: 0 }
+  }
+
+  const brightness = await analyzeBrightness(buffer)
+
+  // Only correct if below the minimum threshold
+  if (brightness >= options.minBrightness) {
+    return { buffer, corrected: false, originalBrightness: brightness }
+  }
+
+  // Calculate gamma correction factor
+  // We want to lift brightness from current to target
+  // Using gamma: output = input^(1/gamma)
+  // To lift darks: gamma > 1 means 1/gamma < 1, which lightens
+  const ratio = options.targetBrightness / brightness
+  // Clamp the correction to avoid extreme adjustments
+  const clampedRatio = Math.min(Math.max(ratio, 1.0), 2.5)
+
+  // Convert ratio to gamma: we use the formula gamma = 1 / log_base_ratio
+  // Simpler approach: use linear multiplier combined with gamma
+  // For better results, use gamma correction (lifts midtones without clipping highlights)
+  const gamma = 1 / Math.pow(clampedRatio, 0.5)  // Softer correction curve
+
+  const corrected = await sharp(buffer)
+    .gamma(gamma)
+    .toBuffer()
+
+  return { buffer: corrected, corrected: true, originalBrightness: brightness }
 }
 
 /**
@@ -194,22 +256,32 @@ export async function processCard(
   // Step 2: Validate crop
   const validation = validateCrop(region, options.dpi)
 
-  // Step 3: Apply color adjustments if configured
-  let colorAdjusted = cropped
-  if (options.colorAdjustments) {
-    colorAdjusted = await adjustColors(cropped, options.colorAdjustments)
+  // Step 3: Auto-brightness normalization (before color adjustments)
+  let brightnessCorrected = cropped
+  if (options.autoBrightness?.enabled) {
+    const result = await normalizeBrightness(cropped, options.autoBrightness)
+    brightnessCorrected = result.buffer
+    if (result.corrected) {
+      console.log(`[ImageProcessor] Card ${cardNumber}${side}: brightness ${result.originalBrightness.toFixed(1)} -> corrected`)
+    }
   }
 
-  // Step 4: Add margin if configured
+  // Step 4: Apply color adjustments if configured
+  let colorAdjusted = brightnessCorrected
+  if (options.colorAdjustments) {
+    colorAdjusted = await adjustColors(brightnessCorrected, options.colorAdjustments)
+  }
+
+  // Step 5: Add margin if configured
   const withMargin = await addMargin(colorAdjusted, options.marginPx)
 
-  // Step 5: Export to final format
+  // Step 6: Export to final format
   const final = await exportImage(withMargin, {
     format: options.format,
     jpgQuality: options.jpgQuality,
   })
 
-  // Step 6: Generate filename
+  // Step 7: Generate filename
   const filename = generateFilename(cardNumber, side, options.format)
 
   return {

@@ -4,7 +4,10 @@
       "Bash(bun add:*)",
       "Bash(scanimage -A)",
       "WebSearch",
-      "Bash(bun run typecheck:*)"
+      "Bash(bun run typecheck:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: serialize page processing to prevent race condition\n\nPages were being processed concurrently due to async event handlers,\ncausing only the first card to be saved when the complete event fired\nand reset state before other handlers finished.\n\n- Add processingQueue to chain page processing sequentially\n- Wait for queue to drain before resetting state on complete/error\n- Adjust default color settings \\(contrast -10, saturation 0.9\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push)"
     ]
   }
 }

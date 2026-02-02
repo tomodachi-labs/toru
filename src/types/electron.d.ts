@@ -8,6 +8,15 @@ export interface ScanProgress {
   current: number
   total: number
   preview?: string // Base64 encoded image
+  cardNumber?: number
+  side?: 'F' | 'B'
+}
+
+export interface ScannedCard {
+  cardNumber: number
+  side: 'F' | 'B'
+  preview: string // Base64 encoded image
+  timestamp: number
 }
 
 export interface ScannerDevice {
@@ -30,6 +39,10 @@ export interface Settings {
   scannerGamma: number       // 0.5 to 2.0
   // Post-processing color adjustments (applied after scan)
   saturation: number         // 0.5 to 1.5
+  // Auto-brightness normalization (for holo cards)
+  autoBrightness: boolean    // Enable automatic brightness correction
+  targetBrightness: number   // Target mean brightness (0-255)
+  minBrightness: number      // Only correct images darker than this
 }
 
 export interface ElectronAPI {

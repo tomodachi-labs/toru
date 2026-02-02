@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Progress } from '@/components/ui/progress'
 import {
   Scan,
   Square,
@@ -13,8 +12,11 @@ import {
   Layers,
   Image as ImageIcon,
   X,
+  ChevronLeft,
+  ChevronRight,
+  RotateCcw,
 } from 'lucide-react'
-import type { ScanProgress, ScannerDevice, Settings } from './types/electron'
+import type { ScanProgress, ScannerDevice, Settings, ScannedCard } from './types/electron'
 
 function App() {
   // Scanner state
@@ -25,6 +27,11 @@ function App() {
   const [progress, setProgress] = useState<ScanProgress | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loadingDevices, setLoadingDevices] = useState(true)
+
+  // Preview gallery state
+  const [scannedCards, setScannedCards] = useState<ScannedCard[]>([])
+  const [selectedCardIndex, setSelectedCardIndex] = useState<number | null>(null)
+  const thumbnailsRef = useRef<HTMLDivElement>(null)
 
   // Settings state
   const [showSettings, setShowSettings] = useState(false)
@@ -40,6 +47,9 @@ function App() {
     scannerContrast: 10,
     scannerGamma: 1.0,
     saturation: 1.1,
+    autoBrightness: true,
+    targetBrightness: 128,
+    minBrightness: 100,
   })
 
   // Completed scans counter
@@ -55,6 +65,33 @@ function App() {
   useEffect(() => {
     const unsubProgress = window.electronAPI.onScanProgress((p) => {
       setProgress(p)
+
+      // Add to gallery if this is a new card scan
+      if (p.preview && p.cardNumber !== undefined && p.side) {
+        const newCard: ScannedCard = {
+          cardNumber: p.cardNumber,
+          side: p.side,
+          preview: p.preview,
+          timestamp: Date.now(),
+        }
+
+        setScannedCards((prev) => {
+          // Check if we already have this exact card (same number + side)
+          const existingIndex = prev.findIndex(
+            (c) => c.cardNumber === p.cardNumber && c.side === p.side
+          )
+          if (existingIndex >= 0) {
+            // Replace existing
+            const updated = [...prev]
+            updated[existingIndex] = newCard
+            return updated
+          }
+          return [...prev, newCard]
+        })
+
+        // Auto-select the newest card
+        setSelectedCardIndex(null) // Will show latest
+      }
     })
 
     const unsubComplete = window.electronAPI.onScanComplete((result) => {
@@ -62,7 +99,6 @@ function App() {
       if (result.cardCount) {
         setTotalScanned((prev) => prev + result.cardCount!)
       }
-      // Don't clear progress - keep the last preview visible
     })
 
     const unsubError = window.electronAPI.onScanError((err) => {
@@ -77,6 +113,17 @@ function App() {
       unsubError()
     }
   }, [])
+
+  // Scroll to selected thumbnail
+  useEffect(() => {
+    if (thumbnailsRef.current && selectedCardIndex !== null) {
+      const thumbnails = thumbnailsRef.current.querySelectorAll('[data-thumbnail]')
+      const target = thumbnails[selectedCardIndex] as HTMLElement
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
+      }
+    }
+  }, [selectedCardIndex])
 
   const loadDevices = useCallback(async () => {
     setLoadingDevices(true)
@@ -122,6 +169,8 @@ function App() {
     if (!batchName.trim()) return
     setError(null)
     setScanning(true)
+    setScannedCards([]) // Clear previous batch
+    setSelectedCardIndex(null)
 
     // Save device selection
     if (selectedDevice !== settings.deviceId) {
@@ -140,10 +189,52 @@ function App() {
   async function stopScan() {
     await window.electronAPI.scanner.stop()
     setScanning(false)
-    // Don't clear progress - keep the last preview visible
   }
 
-  const progressPercent = progress ? (progress.current / progress.total) * 100 : 0
+  function clearGallery() {
+    setScannedCards([])
+    setSelectedCardIndex(null)
+  }
+
+  // Get currently displayed card
+  const displayedCard =
+    selectedCardIndex !== null
+      ? scannedCards[selectedCardIndex]
+      : scannedCards[scannedCards.length - 1]
+
+  // Navigation helpers
+  const canGoPrev = selectedCardIndex === null ? scannedCards.length > 1 : selectedCardIndex > 0
+  const canGoNext = selectedCardIndex !== null && selectedCardIndex < scannedCards.length - 1
+
+  function goToPrev() {
+    if (selectedCardIndex === null) {
+      setSelectedCardIndex(scannedCards.length - 2)
+    } else if (selectedCardIndex > 0) {
+      setSelectedCardIndex(selectedCardIndex - 1)
+    }
+  }
+
+  function goToNext() {
+    if (selectedCardIndex !== null && selectedCardIndex < scannedCards.length - 1) {
+      setSelectedCardIndex(selectedCardIndex + 1)
+    }
+  }
+
+  // Keyboard navigation
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'ArrowLeft' && canGoPrev) {
+        goToPrev()
+      } else if (e.key === 'ArrowRight' && canGoNext) {
+        goToNext()
+      } else if (e.key === 'Escape' && selectedCardIndex !== null) {
+        setSelectedCardIndex(null)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [canGoPrev, canGoNext, selectedCardIndex])
+
   const canStartScan = batchName.trim() && selectedDevice && !scanning
 
   return (
@@ -202,14 +293,15 @@ function App() {
         <main className="flex-1 p-6">
           <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-[1fr_400px] gap-6 stagger-children">
             {/* Preview area */}
-            <div className="order-2 lg:order-1">
+            <div className="order-2 lg:order-1 flex flex-col gap-4">
+              {/* Main preview */}
               <div
                 className={`
                   relative rounded-xl border-2 bg-card/50 backdrop-blur-sm overflow-hidden
-                  transition-all duration-500 ease-out
+                  transition-all duration-500 ease-out flex-1
                   ${scanning ? 'border-accent animate-pulse-glow' : 'border-border'}
                 `}
-                style={{ minHeight: '500px' }}
+                style={{ minHeight: '420px' }}
               >
                 {/* Preview header */}
                 <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-background/90 to-transparent">
@@ -221,11 +313,20 @@ function App() {
                       {scanning ? 'Live Preview' : 'Preview'}
                     </span>
                   </div>
-                  {progress && (
-                    <span className="text-xs font-mono text-muted-foreground">
-                      {progress.current}/{progress.total}
-                    </span>
-                  )}
+                  <div className="flex items-center gap-3">
+                    {displayedCard && (
+                      <span className="text-xs font-mono text-muted-foreground bg-background/50 px-2 py-1 rounded">
+                        Card {String(displayedCard.cardNumber).padStart(4, '0')}
+                        {displayedCard.side}
+                      </span>
+                    )}
+                    {scannedCards.length > 0 && (
+                      <span className="text-xs font-mono text-muted-foreground">
+                        {selectedCardIndex !== null ? selectedCardIndex + 1 : scannedCards.length}/
+                        {scannedCards.length}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {/* Scanner line animation */}
@@ -236,13 +337,13 @@ function App() {
                 )}
 
                 {/* Preview content */}
-                <div className="flex items-center justify-center min-h-[500px] p-8">
-                  {progress?.preview ? (
+                <div className="flex items-center justify-center min-h-[420px] p-8">
+                  {displayedCard ? (
                     <div className="relative animate-fade-in">
                       <img
-                        src={`data:image/${settings.format === 'jpg' ? 'jpeg' : 'png'};base64,${progress.preview}`}
-                        alt="Last scanned card"
-                        className="max-h-[450px] max-w-full object-contain rounded-lg shadow-2xl shadow-black/50"
+                        src={`data:image/${settings.format === 'jpg' ? 'jpeg' : 'png'};base64,${displayedCard.preview}`}
+                        alt={`Card ${displayedCard.cardNumber} ${displayedCard.side === 'F' ? 'Front' : 'Back'}`}
+                        className="max-h-[380px] max-w-full object-contain rounded-lg shadow-2xl shadow-black/50"
                       />
                       {/* Card reflection effect */}
                       <div className="absolute inset-x-0 -bottom-4 h-12 bg-gradient-to-b from-black/20 to-transparent blur-sm" />
@@ -262,21 +363,155 @@ function App() {
                   )}
                 </div>
 
-                {/* Progress bar at bottom */}
-                {scanning && (
-                  <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background/90 to-transparent">
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-xs font-mono">
-                        <span className="text-muted-foreground">Progress</span>
-                        <span className="text-foreground tabular-nums">
-                          {Math.round(progressPercent)}%
-                        </span>
-                      </div>
-                      <Progress value={progressPercent} className="h-1.5" />
-                    </div>
-                  </div>
+                {/* Navigation arrows */}
+                {scannedCards.length > 1 && (
+                  <>
+                    <button
+                      onClick={goToPrev}
+                      disabled={!canGoPrev}
+                      className={`
+                        absolute left-3 top-1/2 -translate-y-1/2 z-10
+                        w-10 h-10 rounded-full bg-background/80 backdrop-blur-sm border border-border
+                        flex items-center justify-center
+                        transition-all duration-200
+                        ${canGoPrev ? 'hover:bg-background hover:border-accent hover:text-accent cursor-pointer' : 'opacity-30 cursor-not-allowed'}
+                      `}
+                    >
+                      <ChevronLeft className="w-5 h-5" />
+                    </button>
+                    <button
+                      onClick={goToNext}
+                      disabled={!canGoNext}
+                      className={`
+                        absolute right-3 top-1/2 -translate-y-1/2 z-10
+                        w-10 h-10 rounded-full bg-background/80 backdrop-blur-sm border border-border
+                        flex items-center justify-center
+                        transition-all duration-200
+                        ${canGoNext ? 'hover:bg-background hover:border-accent hover:text-accent cursor-pointer' : 'opacity-30 cursor-not-allowed'}
+                      `}
+                    >
+                      <ChevronRight className="w-5 h-5" />
+                    </button>
+                  </>
                 )}
               </div>
+
+              {/* Thumbnail strip - film contact sheet style */}
+              {scannedCards.length > 0 && (
+                <div className="relative">
+                  {/* Film strip header */}
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs font-mono uppercase tracking-wider text-muted-foreground">
+                        Scanned Cards
+                      </div>
+                      <div className="text-xs font-mono text-accent tabular-nums">
+                        {scannedCards.length} images
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={clearGallery}
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      <RotateCcw className="w-3 h-3 mr-1" />
+                      Clear
+                    </Button>
+                  </div>
+
+                  {/* Sprocket holes top */}
+                  <div className="flex justify-between px-2 mb-1">
+                    {Array.from({ length: Math.min(12, scannedCards.length + 4) }).map((_, i) => (
+                      <div key={i} className="w-3 h-2 rounded-sm bg-border/50" />
+                    ))}
+                  </div>
+
+                  {/* Thumbnails container */}
+                  <div
+                    ref={thumbnailsRef}
+                    className="flex gap-2 overflow-x-auto pb-2 pt-1 px-1 scrollbar-thin"
+                    style={{
+                      scrollbarWidth: 'thin',
+                      scrollbarColor: 'var(--border) transparent',
+                    }}
+                  >
+                    {scannedCards.map((card, index) => {
+                      const isSelected =
+                        selectedCardIndex === index ||
+                        (selectedCardIndex === null && index === scannedCards.length - 1)
+
+                      return (
+                        <button
+                          key={`${card.cardNumber}-${card.side}-${card.timestamp}`}
+                          data-thumbnail
+                          onClick={() => setSelectedCardIndex(index)}
+                          className={`
+                            relative flex-shrink-0 group
+                            transition-all duration-200 ease-out
+                            ${isSelected ? 'scale-105 z-10' : 'hover:scale-102'}
+                          `}
+                        >
+                          {/* Thumbnail frame */}
+                          <div
+                            className={`
+                              relative rounded-md overflow-hidden
+                              border-2 transition-colors duration-200
+                              ${isSelected ? 'border-accent shadow-lg shadow-accent/20' : 'border-border hover:border-muted-foreground'}
+                            `}
+                          >
+                            <img
+                              src={`data:image/${settings.format === 'jpg' ? 'jpeg' : 'png'};base64,${card.preview}`}
+                              alt={`Card ${card.cardNumber}${card.side}`}
+                              className="w-16 h-24 object-cover"
+                            />
+
+                            {/* Side indicator */}
+                            <div
+                              className={`
+                                absolute bottom-0 left-0 right-0
+                                px-1 py-0.5 text-center
+                                text-[10px] font-mono font-medium uppercase
+                                ${card.side === 'F' ? 'bg-primary/90 text-primary-foreground' : 'bg-secondary text-secondary-foreground'}
+                              `}
+                            >
+                              {card.side === 'F' ? 'Front' : 'Back'}
+                            </div>
+
+                            {/* Hover overlay */}
+                            <div
+                              className={`
+                                absolute inset-0 bg-accent/10 opacity-0
+                                transition-opacity duration-200
+                                ${!isSelected && 'group-hover:opacity-100'}
+                              `}
+                            />
+                          </div>
+
+                          {/* Card number label */}
+                          <div className="mt-1 text-center">
+                            <span
+                              className={`
+                                text-[10px] font-mono tabular-nums
+                                ${isSelected ? 'text-accent' : 'text-muted-foreground'}
+                              `}
+                            >
+                              {String(card.cardNumber).padStart(4, '0')}
+                            </span>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* Sprocket holes bottom */}
+                  <div className="flex justify-between px-2 mt-1">
+                    {Array.from({ length: Math.min(12, scannedCards.length + 4) }).map((_, i) => (
+                      <div key={i} className="w-3 h-2 rounded-sm bg-border/50" />
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Control panel */}
@@ -372,15 +607,15 @@ function App() {
                         {progress.current}
                       </p>
                       <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                        Scanned
+                        Cards
                       </p>
                     </div>
                     <div className="rounded-lg bg-secondary/50 p-3 text-center">
                       <p className="text-2xl font-mono font-medium tabular-nums">
-                        {progress.total - progress.current}
+                        {scannedCards.length}
                       </p>
                       <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                        Remaining
+                        Images
                       </p>
                     </div>
                   </div>

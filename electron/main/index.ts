@@ -25,10 +25,14 @@ let settings = {
   duplex: true,
   // Scanner color adjustments (applied during scan)
   scannerBrightness: 0,   // -50 to 50 (maps to -127..127 internally)
-  scannerContrast: -10,   // -50 to 50 - reduced to compensate for scanner
+  scannerContrast: 0,     // -50 to 50
   scannerGamma: 1.0,      // 0.5 to 2.0
   // Post-processing color adjustments (applied after scan)
-  saturation: 0.9,        // 0.5 to 1.5 - reduced to compensate for scanner
+  saturation: 1.0,        // 0.5 to 1.5 (1.0 = no change)
+  // Auto-brightness normalization
+  autoBrightness: false,      // Disabled - can affect holo cards
+  targetBrightness: 128,      // Target mean brightness (0-255)
+  minBrightness: 100,         // Only correct images darker than this
 }
 
 // Set default output directory after app is ready
@@ -113,6 +117,12 @@ scanner.on('page', (page) => {
         colorAdjustments: settings.saturation !== 1.0
           ? { saturation: settings.saturation }
           : undefined,
+        // Auto-brightness for holo cards
+        autoBrightness: {
+          enabled: settings.autoBrightness,
+          targetBrightness: settings.targetBrightness,
+          minBrightness: settings.minBrightness,
+        },
       }
 
       const processed = await processCard(
@@ -143,6 +153,8 @@ scanner.on('page', (page) => {
         current: cardCount,
         total: 0, // Unknown total with ADF
         preview: processed.buffer.toString('base64'),
+        cardNumber: page.cardNumber,
+        side: page.side,
       })
     } catch (err) {
       console.error('[Main] Error processing page:', err)
